@@ -137,7 +137,7 @@ def show_cad(
     | list[dict[str, float | str | None]]
     | None = None,
     labels: str | list[str] | None = None,
-    backend: str | ViewerBackend = ViewerBackend.FREECAD,
+    backend: str | ViewerBackend = ViewerBackend.POLYSCOPE,
     **kwargs,
 ):
     """
