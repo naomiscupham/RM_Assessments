@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2021-present I.A. Maione, S. McIntosh
 # SPDX-FileCopyrightText: 2021-present J. Morris, D. Short
 #
+# Option to expand the port at the top. P. Mazerewicz, 2026
+#
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
 """
@@ -32,6 +34,15 @@ from bluemira.geometry.tools import (
 )
 from bluemira.materials import Void
 
+GEOM_TOL = 1e-12
+
+# -----------------------------------------------------------------------------
+# UPPER PORT EXPANSION PARAMETERS
+# -----------------------------------------------------------------------------
+# Percent values are provided in reactor parameters and interpreted relative to:
+# - z_max for the depth of the expanded section measured from the top
+# - base X span (x_max - x_min) for radial and lateral expansions.
+
 if TYPE_CHECKING:
     from bluemira.base.reactor_config import ConfigParams
     from bluemira.geometry.solid import BluemiraSolid
@@ -47,6 +58,10 @@ class TSUpperPortDuctBuilderParams(ParameterFrame):
     g_ts_tf: Parameter[float]
     tk_ts: Parameter[float]
     g_cr_ts: Parameter[float]
+    upper_port_expanded_section_depth_from_top_pct: Parameter[float]
+    upper_port_expand_radial_outward_pct: Parameter[float]
+    upper_port_expand_radial_inward_pct: Parameter[float]
+    upper_port_expand_lateral_pct: Parameter[float]
 
 
 class TSUpperPortDuctBuilder(Builder):
@@ -104,23 +119,113 @@ class TSUpperPortDuctBuilder(Builder):
         :
             The xyz components
         """
-        xy_voidface = BluemiraFace(xy_face.boundary[1])
-        xy_outface = BluemiraFace(xy_face.boundary[0])
-        port = extrude_shape(xy_face, (0, 0, self.z_max))
-        # Add start-cap for future boolean fragmentation help
+        expand_any = any(
+            abs(v) > GEOM_TOL
+            for v in (
+                self.params.upper_port_expanded_section_depth_from_top_pct.value,
+                self.params.upper_port_expand_radial_outward_pct.value,
+                self.params.upper_port_expand_radial_inward_pct.value,
+                self.params.upper_port_expand_lateral_pct.value,
+            )
+        )
+
+        if not expand_any:
+            xy_voidface = BluemiraFace(xy_face.boundary[1])
+            xy_outface = BluemiraFace(xy_face.boundary[0])
+            port = extrude_shape(xy_face, (0, 0, self.z_max))
+            # Add start-cap for future boolean fragmentation help
+            cap = extrude_shape(xy_outface, vec=(0, 0, 0.1))
+            port = boolean_fuse([port, cap])
+            comp = PhysicalComponent(
+                self.name,
+                port,
+                material=self.get_material(self.TS),
+            )
+            apply_component_display_options(comp, BLUE_PALETTE[self.TS][0])
+            void = PhysicalComponent(
+                self.name + " voidspace",
+                extrude_shape(xy_voidface, (0, 0, self.z_max)),
+                material=Void("vacuum"),
+            )
+            apply_component_display_options(void, color=(0, 0, 0))
+            return [comp, void]
+
+        y_expand = _side_expand_m(
+            self.x_min,
+            self.x_max,
+            self.params.upper_port_expand_lateral_pct.value,
+        )
+        x_min_outer, x_max_outer = _expanded_x_bounds(
+            self.x_min,
+            self.x_max,
+            self.params.upper_port_expand_radial_inward_pct.value,
+            self.params.upper_port_expand_radial_outward_pct.value,
+        )
+        wall_end_tk = self.params.tk_ts.value
+        wall_side_tk = self.params.tk_ts.value
+        expand_from_top_m = _pct_to_m(
+            self.params.upper_port_expanded_section_depth_from_top_pct.value, self.z_max
+        )
+
+        xy_base = xy_face
+        xy_shelf = _make_upper_port_xy_face_with_shelf(
+            self.params.n_TF.value,
+            x_min_base=self.x_min,
+            x_max_base=self.x_max,
+            x_min_outer=x_min_outer,
+            x_max_outer=x_max_outer,
+            wall_end_tk=wall_end_tk,
+            wall_side_tk=wall_side_tk,
+            y_offset=self.y_offset,
+            y_expand=y_expand,
+        )
+        if abs(y_expand) > GEOM_TOL:
+            xy_top = _make_upper_port_xy_face_y_expanded(
+                self.params.n_TF.value,
+                x_min_outer,
+                x_max_outer,
+                wall_end_tk,
+                wall_side_tk,
+                self.y_offset,
+                y_expand,
+                allow_outer_trim=False,
+                allow_inner_trim=False,
+            )
+        else:
+            xy_top = _make_upper_port_xy_face_no_outer_trim(
+                self.params.n_TF.value,
+                x_min_outer,
+                x_max_outer,
+                wall_end_tk,
+                wall_side_tk,
+                self.y_offset,
+            )
+
+        port = _extrude_three_parts(
+            xy_base,
+            xy_shelf,
+            xy_top,
+            self.z_max,
+            shelf_h=max(wall_end_tk, wall_side_tk),
+            expand_from_top_m=expand_from_top_m,
+        )
+
+        xy_outface = BluemiraFace(xy_base.boundary[0])
         cap = extrude_shape(xy_outface, vec=(0, 0, 0.1))
         port = boolean_fuse([port, cap])
-        comp = PhysicalComponent(
-            self.name,
-            port,
-            material=self.get_material(self.TS),
+
+        void = _extrude_three_parts(
+            BluemiraFace(xy_base.boundary[1]),
+            BluemiraFace(xy_shelf.boundary[1]),
+            BluemiraFace(xy_top.boundary[1]),
+            self.z_max,
+            shelf_h=max(wall_end_tk, wall_side_tk),
+            expand_from_top_m=expand_from_top_m,
         )
+
+        comp = PhysicalComponent(self.name, port, material=self.get_material(self.TS))
+        void = PhysicalComponent(self.name + " voidspace", void, material=Void("vacuum"))
         apply_component_display_options(comp, BLUE_PALETTE[self.TS][0])
-        void = PhysicalComponent(
-            self.name + " voidspace",
-            extrude_shape(xy_voidface, (0, 0, self.z_max)),
-            material=Void("vacuum"),
-        )
         apply_component_display_options(void, color=(0, 0, 0))
         return [comp, void]
 
@@ -243,6 +348,10 @@ class VVUpperPortDuctBuilderParams(ParameterFrame):
     g_cr_ts: Parameter[float]
     tk_vv_double_wall: Parameter[float]
     tk_vv_single_wall: Parameter[float]
+    upper_port_expanded_section_depth_from_top_pct: Parameter[float]
+    upper_port_expand_radial_outward_pct: Parameter[float]
+    upper_port_expand_radial_inward_pct: Parameter[float]
+    upper_port_expand_lateral_pct: Parameter[float]
 
 
 class VVUpperPortDuctBuilder(Builder):
@@ -312,24 +421,114 @@ class VVUpperPortDuctBuilder(Builder):
         :
             The xyz components
         """
-        xy_voidface = BluemiraFace(xy_face.boundary[1])
-        xy_outface = BluemiraFace(xy_face.boundary[0])
-        port = extrude_shape(xy_face, (0, 0, self.z_max))
-        # Add start-cap for future boolean fragmentation help
+        expand_any = any(
+            abs(v) > GEOM_TOL
+            for v in (
+                self.params.upper_port_expanded_section_depth_from_top_pct.value,
+                self.params.upper_port_expand_radial_outward_pct.value,
+                self.params.upper_port_expand_radial_inward_pct.value,
+                self.params.upper_port_expand_lateral_pct.value,
+            )
+        )
+
+        if not expand_any:
+            xy_voidface = BluemiraFace(xy_face.boundary[1])
+            xy_outface = BluemiraFace(xy_face.boundary[0])
+            port = extrude_shape(xy_face, (0, 0, self.z_max))
+            # Add start-cap for future boolean fragmentation help
+            cap = extrude_shape(xy_outface, vec=(0, 0, 0.1))
+            port = boolean_fuse([port, cap])
+
+            comp = PhysicalComponent(
+                self.name,
+                port,
+                material=self.get_material(self.VV),
+            )
+            apply_component_display_options(comp, BLUE_PALETTE[self.VV][0])
+            void = PhysicalComponent(
+                self.name + " voidspace",
+                extrude_shape(xy_voidface, (0, 0, self.z_max)),
+                material=Void("vacuum"),
+            )
+            apply_component_display_options(void, color=(0, 0, 0))
+            return [comp, void]
+
+        y_expand = _side_expand_m(
+            self.x_min,
+            self.x_max,
+            self.params.upper_port_expand_lateral_pct.value,
+        )
+        x_min_outer, x_max_outer = _expanded_x_bounds(
+            self.x_min,
+            self.x_max,
+            self.params.upper_port_expand_radial_inward_pct.value,
+            self.params.upper_port_expand_radial_outward_pct.value,
+        )
+        wall_end_tk = self.params.tk_vv_double_wall.value
+        wall_side_tk = self.params.tk_vv_single_wall.value
+        expand_from_top_m = _pct_to_m(
+            self.params.upper_port_expanded_section_depth_from_top_pct.value, self.z_max
+        )
+
+        xy_base = xy_face
+        xy_shelf = _make_upper_port_xy_face_with_shelf(
+            self.params.n_TF.value,
+            x_min_base=self.x_min,
+            x_max_base=self.x_max,
+            x_min_outer=x_min_outer,
+            x_max_outer=x_max_outer,
+            wall_end_tk=wall_end_tk,
+            wall_side_tk=wall_side_tk,
+            y_offset=self.y_offset,
+            y_expand=y_expand,
+        )
+        if abs(y_expand) > GEOM_TOL:
+            xy_top = _make_upper_port_xy_face_y_expanded(
+                self.params.n_TF.value,
+                x_min_outer,
+                x_max_outer,
+                wall_end_tk,
+                wall_side_tk,
+                self.y_offset,
+                y_expand,
+                allow_outer_trim=False,
+                allow_inner_trim=False,
+            )
+        else:
+            xy_top = _make_upper_port_xy_face_no_outer_trim(
+                self.params.n_TF.value,
+                x_min_outer,
+                x_max_outer,
+                wall_end_tk,
+                wall_side_tk,
+                self.y_offset,
+            )
+
+        port = _extrude_three_parts(
+            xy_base,
+            xy_shelf,
+            xy_top,
+            self.z_max,
+            shelf_h=max(wall_end_tk, wall_side_tk),
+            expand_from_top_m=expand_from_top_m,
+        )
+
+        xy_outface = BluemiraFace(xy_base.boundary[0])
         cap = extrude_shape(xy_outface, vec=(0, 0, 0.1))
         port = boolean_fuse([port, cap])
 
-        comp = PhysicalComponent(
-            self.name,
-            port,
-            material=self.get_material(self.VV),
+        void = _extrude_three_parts(
+            BluemiraFace(xy_base.boundary[1]),
+            BluemiraFace(xy_shelf.boundary[1]),
+            BluemiraFace(xy_top.boundary[1]),
+            self.z_max,
+            shelf_h=max(wall_end_tk, wall_side_tk),
+            expand_from_top_m=expand_from_top_m,
         )
+
+        comp = PhysicalComponent(self.name, port, material=self.get_material(self.VV))
+        void = PhysicalComponent(self.name + " voidspace", void, material=Void("vacuum"))
         apply_component_display_options(comp, BLUE_PALETTE[self.VV][0])
-        void = PhysicalComponent(
-            self.name + " voidspace",
-            extrude_shape(xy_voidface, (0, 0, self.z_max)),
-            material=Void("vacuum"),
-        )
         apply_component_display_options(void, color=(0, 0, 0))
         return [comp, void]
 
@@ -438,6 +637,199 @@ class VVEquatorialPortDuctBuilder(Builder):
         apply_component_display_options(comp, BLUE_PALETTE[self.VV][0])
         apply_component_display_options(void, color=(0, 0, 0))
         return [comp, void]
+
+
+def _pct_to_m(pct: float, base: float) -> float:
+    return 0.01 * pct * base
+
+
+def _expanded_x_bounds(
+    x_min: float,
+    x_max: float,
+    radial_inward_pct: float,
+    radial_outward_pct: float,
+) -> tuple[float, float]:
+    x_span = x_max - x_min
+    if x_span <= 0:
+        raise BuilderError("Port dimensions too small")
+    return (
+        x_min - _pct_to_m(radial_inward_pct, x_span),
+        x_max + _pct_to_m(radial_outward_pct, x_span),
+    )
+
+
+def _side_expand_m(x_min: float, x_max: float, lateral_pct: float) -> float:
+    x_span = x_max - x_min
+    if x_span <= 0:
+        raise BuilderError("Port dimensions too small")
+    return _pct_to_m(lateral_pct, x_span)
+
+
+def _make_upper_port_xy_face_y_expanded(
+    n_TF: int,
+    x_min: float,
+    x_max: float,
+    wall_end_tk: float,
+    wall_side_tk: float,
+    y_offset: float,
+    y_expand: float,
+    *,
+    allow_outer_trim: bool = True,
+    allow_inner_trim: bool = True,
+) -> BluemiraFace:
+    half_beta = np.pi / n_TF
+    cos_hb = np.cos(half_beta)
+    tan_hb = np.tan(half_beta)
+
+    y_tf_out = y_offset / cos_hb
+    y_tf_in = y_tf_out + wall_side_tk / cos_hb
+
+    x1 = x_min
+
+    a1 = 1 + tan_hb**2
+    b1 = -2 * y_tf_out * tan_hb
+    c1 = y_tf_out**2 - x_max**2
+    discriminant = b1**2 - 4 * a1 * c1
+    x4 = 0.5 * (-b1 + np.sqrt(discriminant)) / a1
+
+    x2, x3 = x1 + wall_end_tk, x4 - wall_end_tk
+
+    if x2 >= x3:
+        raise BuilderError("Port dimensions too small")
+
+    y1 = x1 * tan_hb - y_tf_out
+
+    if y1 < 0 and allow_outer_trim:
+        y1 = 0
+        x1 = y_tf_out / tan_hb
+        x2 = x1 + wall_end_tk
+
+    y2, y3 = x2 * tan_hb - y_tf_in, x3 * tan_hb - y_tf_in
+
+    if y3 <= 0:
+        raise BuilderError("Port dimensions too small")
+
+    if y2 < 0 and allow_inner_trim:
+        y2 = 0
+        c = y3 - tan_hb * x3
+        x2 = -c / tan_hb
+        x1 = x2 - wall_end_tk
+
+    y1, y4 = x1 * tan_hb - y_tf_out, x4 * tan_hb - y_tf_out
+
+    if abs(y_expand) > GEOM_TOL:
+        y1 += y_expand
+        y2 += y_expand
+        y3 += y_expand
+        y4 += y_expand
+
+    inner_wire = make_polygon(
+        {"x": [x2, x3, x3, x2], "y": [-y2, -y3, y3, y2]}, closed=True
+    )
+    outer_wire = make_polygon(
+        {"x": [x1, x4, x4, x1], "y": [-y1, -y4, y4, y1]}, closed=True
+    )
+
+    xy_face = BluemiraFace((outer_wire, inner_wire))
+    xy_face.rotate(degree=np.rad2deg(half_beta))
+
+    return xy_face
+
+
+def _make_upper_port_xy_face_no_outer_trim(
+    n_TF: int,
+    x_min: float,
+    x_max: float,
+    wall_end_tk: float,
+    wall_side_tk: float,
+    y_offset: float,
+) -> BluemiraFace:
+    return _make_upper_port_xy_face_y_expanded(
+        n_TF,
+        x_min,
+        x_max,
+        wall_end_tk,
+        wall_side_tk,
+        y_offset,
+        y_expand=0.0,
+        allow_outer_trim=False,
+        allow_inner_trim=False,
+    )
+
+
+def _make_upper_port_xy_face_with_shelf(
+    n_tf: int,
+    x_min_base: float,
+    x_max_base: float,
+    x_min_outer: float,
+    x_max_outer: float,
+    wall_end_tk: float,
+    wall_side_tk: float,
+    y_offset: float,
+    y_expand: float,
+) -> BluemiraFace:
+    if abs(y_expand) > GEOM_TOL:
+        outer_face = _make_upper_port_xy_face_y_expanded(
+            n_tf,
+            x_min_outer,
+            x_max_outer,
+            wall_end_tk,
+            wall_side_tk,
+            y_offset,
+            y_expand,
+            allow_outer_trim=False,
+            allow_inner_trim=False,
+        )
+    else:
+        outer_face = _make_upper_port_xy_face_no_outer_trim(
+            n_tf,
+            x_min_outer,
+            x_max_outer,
+            wall_end_tk,
+            wall_side_tk,
+            y_offset,
+        )
+
+    inner_face = make_upper_port_xy_face(
+        n_tf, x_min_base, x_max_base, wall_end_tk, wall_side_tk, y_offset
+    )
+
+    return BluemiraFace((outer_face.boundary[0], *inner_face.boundary[1:]))
+
+
+def _extrude_segment(face: BluemiraFace, z0: float, height: float):
+    if height <= GEOM_TOL:
+        return None
+    solid = extrude_shape(face, (0, 0, height))
+    if z0 > GEOM_TOL:
+        solid.translate((0, 0, z0))
+    return solid
+
+
+def _fuse_nonempty(shapes):
+    shapes = [s for s in shapes if s is not None]
+    if not shapes:
+        return None
+    if len(shapes) == 1:
+        return shapes[0]
+    return boolean_fuse(shapes)
+
+
+def _extrude_three_parts(
+    xy_base: BluemiraFace,
+    xy_shelf: BluemiraFace,
+    xy_top: BluemiraFace,
+    z_max: float,
+    shelf_h: float,
+    expand_from_top_m: float,
+):
+    z_cut = max(0.0, z_max - expand_from_top_m)
+    z2 = min(z_max, z_cut + max(0.0, shelf_h))
+
+    base_solid = _extrude_segment(xy_base, z0=0.0, height=max(0.0, z_cut))
+    shelf_solid = _extrude_segment(xy_shelf, z0=z_cut, height=max(0.0, z2 - z_cut))
+    top_solid = _extrude_segment(xy_top, z0=z2, height=max(0.0, z_max - z2))
+    return _fuse_nonempty([base_solid, shelf_solid, top_solid])
 
 
 def make_upper_port_xy_face(

@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2021-present I.A. Maione, S. McIntosh
 # SPDX-FileCopyrightText: 2021-present J. Morris, D. Short
 #
+# Option to expand the port at the top. P. Mazerewicz, 2026
+#
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
 """
@@ -21,6 +23,8 @@ from bluemira.geometry.plane import BluemiraPlane
 from bluemira.geometry.tools import make_polygon, slice_shape
 from bluemira.optimisation import ConstraintT, OptimisationProblem
 from eudemo.tools import get_inner_cut_point
+
+GEOM_TOL = 1e-12
 
 
 class UpperPortOP(OptimisationProblem):
@@ -218,6 +222,12 @@ class UpperPortKOZDesignerParams(ParameterFrame):
     """Blanket inboard thickness [m]."""
     tk_bb_ob: Parameter[float]
     """Blanket outboard thickness [m]."""
+    upper_port_expanded_section_depth_from_top_pct: Parameter[float]
+    """Depth of expanded section measured from the top, as % of port height."""
+    upper_port_expand_radial_outward_pct: Parameter[float]
+    """Outward expansion of the outer edge, as % of base port width."""
+    upper_port_expand_radial_inward_pct: Parameter[float]
+    """Inward expansion of the inner edge, as % of base port width."""
 
 
 class UpperPortKOZDesigner(Designer[tuple[BluemiraFace, float, float]]):
@@ -283,15 +293,53 @@ class UpperPortKOZDesigner(Designer[tuple[BluemiraFace, float, float]]):
         r_up_inner -= offset
         r_up_outer += offset
 
+        base_width = r_up_outer - r_up_inner
+        expand_from_top_m = _pct_to_m(
+            self.params.upper_port_expanded_section_depth_from_top_pct.value,
+            self.upper_port_extrema,
+        )
+        expand_outward_m = _pct_to_m(
+            self.params.upper_port_expand_radial_outward_pct.value,
+            base_width,
+        )
+        expand_inward_m = _pct_to_m(
+            self.params.upper_port_expand_radial_inward_pct.value,
+            base_width,
+        )
+
         return (
-            build_upper_port_zone(r_up_inner, r_up_outer, z_max=self.upper_port_extrema),
+            build_upper_port_zone(
+                r_up_inner,
+                r_up_outer,
+                z_max=self.upper_port_extrema,
+                expand_from_top_m=expand_from_top_m,
+                expand_outward_m=expand_outward_m,
+                expand_inward_m=expand_inward_m,
+            ),
             r_cut,
             cut_angle,
         )
 
 
+def _pct_to_m(pct_value: float, reference_length: float) -> float:
+    """Convert percentage to metres against ``reference_length``.
+
+    Returns
+    -------
+    :
+        Non-negative length in metres derived from the percentage input.
+    """
+    return max(0.0, (pct_value / 100.0) * reference_length)
+
+
 def build_upper_port_zone(
-    r_up_inner: float, r_up_outer: float, z_max: float = 10, z_min: float = 0
+    r_up_inner: float,
+    r_up_outer: float,
+    z_max: float = 10,
+    z_min: float = 0,
+    expand_from_top_m: float = 0,
+    expand_outward_m: float = 0,
+    expand_inward_m: float = 0,
 ) -> BluemiraFace:
     """
     Make the void geometry for the upper port in the poloidal plane.
@@ -306,12 +354,55 @@ def build_upper_port_zone(
         Maximum vertical height of the upper port void space
     z_min:
         Minimum vertical height of the upper port void space
+    expand_from_top_m:
+        Height of the expanded section measured downward from the top
+    expand_outward_m:
+        Additional radial size at the outer edge in the expanded section
+    expand_inward_m:
+        Additional radial size at the inner edge in the expanded section
 
     Returns
     -------
     :
         Face representing the upper port void space in the x-z plane
     """
-    x = [r_up_inner, r_up_outer, r_up_outer, r_up_inner]
-    z = [z_min, z_min, z_max, z_max]
+    expand_any = any(
+        abs(v) > GEOM_TOL for v in (expand_from_top_m, expand_outward_m, expand_inward_m)
+    )
+    if not expand_any:
+        x = [r_up_inner, r_up_outer, r_up_outer, r_up_inner]
+        z = [z_min, z_min, z_max, z_max]
+        return BluemiraFace(make_polygon({"x": x, "y": 0, "z": z}, closed=True))
+
+    z_cut = max(z_min, z_max - expand_from_top_m)
+    if abs(z_cut - z_min) < GEOM_TOL:
+        x = [
+            r_up_inner - expand_inward_m,
+            r_up_outer + expand_outward_m,
+            r_up_outer + expand_outward_m,
+            r_up_inner - expand_inward_m,
+        ]
+        z = [z_min, z_min, z_max, z_max]
+        return BluemiraFace(make_polygon({"x": x, "y": 0, "z": z}, closed=True))
+
+    x = [
+        r_up_inner,
+        r_up_outer,
+        r_up_outer,
+        r_up_outer + expand_outward_m,
+        r_up_outer + expand_outward_m,
+        r_up_inner - expand_inward_m,
+        r_up_inner - expand_inward_m,
+        r_up_inner,
+    ]
+    z = [
+        z_min,
+        z_min,
+        z_cut,
+        z_cut,
+        z_max,
+        z_max,
+        z_cut,
+        z_cut,
+    ]
     return BluemiraFace(make_polygon({"x": x, "y": 0, "z": z}, closed=True))

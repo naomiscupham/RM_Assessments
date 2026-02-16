@@ -191,6 +191,30 @@
     "source": "Input",
     "long_name": "Lower port angle (downwards from 0 degrees to -90)"
   },
+  "upper_port_expanded_section_depth_from_top_pct": {
+    "value": 10.0,
+    "unit": "percent",
+    "source": "Input",
+    "long_name": "Upper port expanded section depth from top"
+  },
+  "upper_port_expand_radial_outward_pct": {
+    "value": 7.0,
+    "unit": "percent",
+    "source": "Input",
+    "long_name": "Upper port radial outward expansion"
+  },
+  "upper_port_expand_radial_inward_pct": {
+    "value": 2.0,
+    "unit": "percent",
+    "source": "Input",
+    "long_name": "Upper port radial inward expansion"
+  },
+  "upper_port_expand_lateral_pct": {
+    "value": 1.0,
+    "unit": "percent",
+    "source": "Input",
+    "long_name": "Upper port lateral expansion"
+  },
   "x_gs_kink_diff": {
     "value": 2,
     "unit": "m",
@@ -768,7 +792,7 @@
     "long_name": "Fraction of neutrons deposited in VV"
   },
   "v_burn": {
-    "value": 2.949e-2,
+    "value": 0.02949,
     "unit": "volt",
     "source": "Input",
     "long_name": "Loop voltage during burn"
@@ -986,13 +1010,13 @@
     "long_name": "Blanket Type"
   },
   "bb_p_inlet": {
-    "value": 8e6,
+    "value": 8000000.0,
     "unit": "Pa",
     "source": "Input",
     "long_name": "Breeding blanket inlet pressure"
   },
   "bb_p_outlet": {
-    "value": 7.5e6,
+    "value": 7500000.0,
     "unit": "Pa",
     "source": "Input",
     "long_name": "Breeding blanket outlet pressure"
@@ -1076,7 +1100,7 @@
     "long_name": "Electron cyclotron resonce heating wallplug efficiency"
   },
   "gamma_ecrh": {
-    "value": 0.3e20,
+    "value": 3e19,
     "unit": "A/W/m^2",
     "source": "Input",
     "long_name": "Electron cyclotron resonce heating current drive efficiency"

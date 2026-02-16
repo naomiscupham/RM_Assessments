@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2021-present I.A. Maione, S. McIntosh
 # SPDX-FileCopyrightText: 2021-present J. Morris, D. Short
 #
+# Option to expand the port at the top. P. Mazerewicz, 2026
+#
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
 """EUDEMO reactor build parameters."""
@@ -205,6 +207,10 @@ class EUDEMOReactorParams(ParameterFrame):
     tk_vv_single_wall: Parameter[float]
     tk_vv_double_wall: Parameter[float]
     lower_port_angle: Parameter[float]
+    upper_port_expanded_section_depth_from_top_pct: Parameter[float]
+    upper_port_expand_radial_outward_pct: Parameter[float]
+    upper_port_expand_radial_inward_pct: Parameter[float]
+    upper_port_expand_lateral_pct: Parameter[float]
 
     # Powercycle
     bb_p_inlet: Parameter[float]
