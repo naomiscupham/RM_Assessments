@@ -80,8 +80,12 @@ class TSUpperPortDuctBuilder(Builder):
         cryostat_ts_xz: BluemiraWire,
     ):
         super().__init__(params, build_config)
-        self.x_min = port_koz.bounding_box.x_min
-        self.x_max = port_koz.bounding_box.x_max
+        self.x_min, self.x_max = _base_x_bounds_from_koz_bbox(
+            port_koz.bounding_box.x_min,
+            port_koz.bounding_box.x_max,
+            self.params.upper_port_expand_radial_inward_pct.value,
+            self.params.upper_port_expand_radial_outward_pct.value,
+        )
         self.z_max = cryostat_ts_xz.bounding_box.z_max + 0.5 * self.params.g_cr_ts.value
 
         if self.params.tk_ts.value <= 0:
@@ -224,7 +228,9 @@ class TSUpperPortDuctBuilder(Builder):
         )
 
         comp = PhysicalComponent(self.name, port, material=self.get_material(self.TS))
-        void = PhysicalComponent(self.name + " voidspace", void, material=Void("vacuum"))
+        void = PhysicalComponent(
+            self.name + " voidspace", void, material=Void("vacuum")
+        )
         apply_component_display_options(comp, BLUE_PALETTE[self.TS][0])
         apply_component_display_options(void, color=(0, 0, 0))
         return [comp, void]
@@ -329,7 +335,9 @@ class TSEquatorialPortDuctBuilder(Builder):
 
         void = extrude_shape(yz_voidface, vec)
         void.rotate(degree=degree)
-        void = PhysicalComponent(self.name + " voidspace", void, material=Void("vacuum"))
+        void = PhysicalComponent(
+            self.name + " voidspace", void, material=Void("vacuum")
+        )
 
         apply_component_display_options(comp, BLUE_PALETTE[self.TS][0])
         apply_component_display_options(void, color=(0, 0, 0))
@@ -371,8 +379,14 @@ class VVUpperPortDuctBuilder(Builder):
     ):
         super().__init__(params, build_config)
         koz_offset = self.params.tk_ts.value + self.params.g_vv_ts.value
-        self.x_min = port_koz.bounding_box.x_min + koz_offset
-        self.x_max = port_koz.bounding_box.x_max - koz_offset
+        x_min_ts_base, x_max_ts_base = _base_x_bounds_from_koz_bbox(
+            port_koz.bounding_box.x_min,
+            port_koz.bounding_box.x_max,
+            self.params.upper_port_expand_radial_inward_pct.value,
+            self.params.upper_port_expand_radial_outward_pct.value,
+        )
+        self.x_min = x_min_ts_base + koz_offset
+        self.x_max = x_max_ts_base - koz_offset
         self.z_max = cryostat_ts_xz.bounding_box.z_max + 0.5 * self.params.g_cr_ts.value
 
         if (
@@ -527,7 +541,9 @@ class VVUpperPortDuctBuilder(Builder):
         )
 
         comp = PhysicalComponent(self.name, port, material=self.get_material(self.VV))
-        void = PhysicalComponent(self.name + " voidspace", void, material=Void("vacuum"))
+        void = PhysicalComponent(
+            self.name + " voidspace", void, material=Void("vacuum")
+        )
         apply_component_display_options(comp, BLUE_PALETTE[self.VV][0])
         apply_component_display_options(void, color=(0, 0, 0))
         return [comp, void]
@@ -632,7 +648,9 @@ class VVEquatorialPortDuctBuilder(Builder):
 
         void = extrude_shape(yz_voidface, vec)
         void.rotate(degree=degree)
-        void = PhysicalComponent(self.name + " voidspace", void, material=Void("vacuum"))
+        void = PhysicalComponent(
+            self.name + " voidspace", void, material=Void("vacuum")
+        )
 
         apply_component_display_options(comp, BLUE_PALETTE[self.VV][0])
         apply_component_display_options(void, color=(0, 0, 0))
@@ -663,6 +681,33 @@ def _side_expand_m(x_min: float, x_max: float, lateral_pct: float) -> float:
     if x_span <= 0:
         raise BuilderError("Port dimensions too small")
     return _pct_to_m(lateral_pct, x_span)
+
+
+def _base_x_bounds_from_koz_bbox(
+    x_min_bbox: float,
+    x_max_bbox: float,
+    radial_inward_pct: float,
+    radial_outward_pct: float,
+) -> tuple[float, float]:
+    """Recover unexpanded base X bounds from a KOZ bbox."""
+    x_span_bbox = x_max_bbox - x_min_bbox
+    if x_span_bbox <= 0:
+        raise BuilderError("Port dimensions too small")
+
+    if (
+        abs(radial_inward_pct) <= GEOM_TOL
+        and abs(radial_outward_pct) <= GEOM_TOL
+    ):
+        return x_min_bbox, x_max_bbox
+
+    scale = 1 + 0.01 * (radial_inward_pct + radial_outward_pct)
+    if scale <= GEOM_TOL:
+        raise BuilderError("Invalid radial expansion percentages")
+
+    x_span_base = x_span_bbox / scale
+    x_min_base = x_min_bbox + _pct_to_m(radial_inward_pct, x_span_base)
+    x_max_base = x_max_bbox - _pct_to_m(radial_outward_pct, x_span_base)
+    return x_min_base, x_max_base
 
 
 def _make_upper_port_xy_face_y_expanded(
@@ -1007,7 +1052,9 @@ def pipe_pipe_join(
     substantially faster. If the parts do not fully intersect, undesired results
     are to be expected.
     """
-    _, (target_fragments, tool_fragments) = boolean_fragments([target_shape, tool_shape])
+    _, (target_fragments, tool_fragments) = boolean_fragments(
+        [target_shape, tool_shape]
+    )
 
     # Keep the largest piece of the target by volume (opinionated)
     # This is in case its COG is inside the tool void
@@ -1027,10 +1074,12 @@ def pipe_pipe_join(
             new_shape_pieces.append(tool_frag)
         else:
             # Find the union piece(s)
-            new_shape_pieces.extend([
-                tool_frag
-                for targ_frag in target_fragments
-                if tool_frag.is_same(targ_frag)
-            ])
+            new_shape_pieces.extend(
+                [
+                    tool_frag
+                    for targ_frag in target_fragments
+                    if tool_frag.is_same(targ_frag)
+                ]
+            )
 
     return new_shape_pieces
